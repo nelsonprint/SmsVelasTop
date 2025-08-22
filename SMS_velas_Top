@@ -1,0 +1,150 @@
+// ==========================================
+// SMART MONEY CONCEPTS (SMC) TURBINADO + FILTROS
+// ProfitChart - NTSL
+// ==========================================
+
+input
+  MinProporcaoCorpo(0.55);
+  MaxProporcaoPavio(0.45);
+  LookbackEstrutura(20);
+  RiskRR(2.0);
+  StopOffset(5);
+
+var
+  hpv, lpv, lpc, mAtr, atr, hpc, StopPrice: Float;
+  SinalC, SinalV, SinalSC, SinalSV: Boolean;
+  CandleAlta, CandleBaixa: Boolean;
+  MediaCurta, MediaLonga: Float;
+  EntradaCompraValida, EntradaVendaValida: Boolean;
+  UltimaOperacao: Integer;
+  MinimoEntreOperacoes: Integer;
+  PodeTentarEntrada: Boolean;
+
+  Corpo, Range, PavioSup, PavioInf, ProporcaoCorpo: Float;
+  CorpoCurto, PavioOk, SemSpike: Boolean;
+  CandleForte, CandleCurtoComPavio, CandleValido: Boolean;
+
+  MinProporcaoCorpo_Alta, MaxProporcaoPavio_Alta, MaxRangeATR_Alta, MaxCorpoATR_Alta: Float;
+  MaxProporcaoCorpo_Curta, MinProporcaoPavio_Curta, MaxProporcaoPavio_Curta, MaxRangeATR_Curta, MaxCorpoATR_Curta: Float;
+
+  HH, HL, LH, LL: Boolean;
+  BOS_Alta, BOS_Baixa: Boolean;
+
+  MaxHigh, MinLow, Entry, Target: Float;
+  i: integer;
+
+begin
+
+  MinimoEntreOperacoes := 5;
+
+  MinProporcaoCorpo_Alta := 0.70;
+  MaxProporcaoPavio_Alta := 0.30;
+  MaxRangeATR_Alta       := 2.2;
+  MaxCorpoATR_Alta       := 1.5;
+
+  MaxProporcaoCorpo_Curta := 0.28;
+  MinProporcaoPavio_Curta := 0.32;
+  MaxProporcaoPavio_Curta := 0.48;
+  MaxRangeATR_Curta       := 1.8;
+  MaxCorpoATR_Curta       := 0.9;
+
+  hpc := Highest(high, 20);
+  lpc := Lowest(Low, 10);
+  hpv := Highest(high, 10);
+  lpv := Lowest(Low, 20);
+
+  atr := AvgTrueRange(20, 0);
+  mAtr := Media(20, atr);
+
+  MediaCurta := Media(Close, 9);
+  MediaLonga := Media(Close, 21);
+
+  CandleAlta := Close > Open;
+  CandleBaixa := Close < Open;
+
+  SinalC  := (Close > hpc[1]);
+  SinalSC := (Close < lpc[1]);
+  SinalV  := (Close < lpv[1]);
+  SinalSV := (Close > hpv[1]);
+
+  Range := High - Low;
+  if Range = 0 then Range := 0.0001;
+
+  Corpo := Abs(Close - Open);
+  PavioSup := High - Max(Open, Close);
+  PavioInf := Min(Open, Close) - Low;
+  ProporcaoCorpo := Corpo / Range;
+
+  CandleForte := (ProporcaoCorpo >= MinProporcaoCorpo_Alta) and
+                 (PavioSup <= MaxProporcaoPavio_Alta * Range) and
+                 (PavioInf <= MaxProporcaoPavio_Alta * Range) and
+                 (Range <= MaxRangeATR_Alta * atr) and
+                 (Corpo <= MaxCorpoATR_Alta * atr);
+
+  CorpoCurto := (ProporcaoCorpo <= MaxProporcaoCorpo_Curta) and
+                (Corpo <= MaxCorpoATR_Curta * atr);
+
+  PavioOk := (PavioSup >= MinProporcaoPavio_Curta * Range) and (PavioSup <= MaxProporcaoPavio_Curta * Range) and
+             (PavioInf >= MinProporcaoPavio_Curta * Range) and (PavioInf <= MaxProporcaoPavio_Curta * Range);
+
+  SemSpike := (Range <= MaxRangeATR_Curta * atr);
+
+  CandleCurtoComPavio := CorpoCurto and PavioOk and SemSpike;
+
+  CandleValido := CandleForte or CandleCurtoComPavio;
+
+  if UltimaOperacao = 0 then UltimaOperacao := -10000;
+
+  MaxHigh := high[1];
+  MinLow  := low[1];
+
+  for i := 2 to LookbackEstrutura do
+  begin
+    if high[i] > MaxHigh then MaxHigh := high[i];
+    if low[i]  < MinLow  then MinLow  := low[i];
+  end;
+
+  HH := high > MaxHigh;
+  LL := low  < MinLow;
+  HL := (low > MinLow)  and (close > close[1]);
+  LH := (high < MaxHigh) and (close < close[1]);
+
+  BOS_Alta  := HH and CandleAlta;
+  BOS_Baixa := LL and CandleBaixa;
+
+  PodeTentarEntrada := (CurrentBar - UltimaOperacao >= MinimoEntreOperacoes);
+
+  EntradaCompraValida := (BOS_Alta or HL) and CandleAlta and (MediaCurta >= MediaLonga) and CandleValido and PodeTentarEntrada;
+  EntradaVendaValida  := (BOS_Baixa or LH) and CandleBaixa and (MediaCurta <= MediaLonga) and CandleValido and PodeTentarEntrada;
+
+  if EntradaCompraValida then
+  begin
+    Entry := Close;
+    StopPrice  := MinLow - StopOffset;
+    Target := Entry + (Entry - StopPrice) * RiskRR;
+
+    BuyAtMarket();
+    SellToCoverStop(StopPrice, 1);  // Stop Loss
+    SellToCoverStop(Target, 1);     // Take Profit
+
+    UltimaOperacao := CurrentBar;
+
+    PlotText("BUY BOS", date, time, low, rgb(0,200,0));
+  end;
+
+  if EntradaVendaValida then
+  begin
+    Entry := Close;
+    StopPrice  := MaxHigh + StopOffset;
+    Target := Entry - (StopPrice - Entry) * RiskRR;
+
+    SellShortAtMarket();
+    BuyToCoverStop(StopPrice, 1);   // Stop Loss
+    BuyToCoverStop(Target, 1);      // Take Profit
+
+    UltimaOperacao := CurrentBar;
+
+    PlotText("SELL BOS", date, time, high, rgb(200,0,0));
+  end;
+
+end;
